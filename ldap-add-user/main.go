@@ -39,11 +39,11 @@ func main() {
 	//addLDAPUser()
 	router := mux.NewRouter()
 	// Login Route
-	router.HandleFunc("/login/", loginAPI).Methods("POST")
+	router.HandleFunc("/login", loginAPI).Methods("POST")
 	// AddUSER route
 	router.HandleFunc("/addNewUserToLDAP", addNewUserToLdap).Methods("POST")
 	// Chnage password URL
-	router.HandleFunc("/chnagePassLDAP", middlewareAuth(http.HandlerFunc(passwordChnageAPI))).Methods("GET")
+	router.HandleFunc("/chnagePassLDAP", middlewareAuth(http.HandlerFunc(passwordChnageAPI))).Methods("POST")
 
 	log.Println("server started and listening on http://127.0.0.1:8080")
 	http.ListenAndServe("127.0.0.1:8080", router)
@@ -73,10 +73,14 @@ func loginAPI(w http.ResponseWriter, r *http.Request) {
 	} else {
 		if AuthenticateLDAP(username, passowrd) {
 			w.WriteHeader(200)
+			body := "done"
+			w.Write([]byte(body))
 			return
 		} else {
 			fmt.Println("Error parsing basic auth")
 			w.WriteHeader(401)
+			body := "Error parsing basic auth"
+			w.Write([]byte(body))
 			return
 		}
 	}
@@ -109,6 +113,7 @@ func AuthenticateLDAP(cn string, pass string) bool {
 }
 
 /*
+Example
 {
     "cn": "sagnik.sarkar",
     "pass": "testPassowrd",
@@ -146,7 +151,6 @@ func addNewUserToLdap(w http.ResponseWriter, r *http.Request) {
 	addReq.Attribute("mail", []string{newUSER.Email})
 	addReq.Attribute("userPassword", []string{newUSER.Pass})
 
-	//log.Println(add(addReq, l))
 	// Add the user to LDAP
 	if addTOLDAP(addReq, ldapConnection) {
 		w.WriteHeader(200)
@@ -173,28 +177,61 @@ func addTOLDAP(addRequest *ldap.AddRequest, l *ldap.Conn) bool {
 }
 
 func passwordChnageAPI(w http.ResponseWriter, r *http.Request) {
-	//var passStruct changePassLDAP _
-	fmt.Printf("TEST")
-	w.Write([]byte("OK"))
+
+	w.Header().Set("Context-Type", "application/json")
+	var passwordChnageDetails changePassLDAP
+	_ = json.NewDecoder(r.Body).Decode(&passwordChnageDetails)
+
+	passChangeOnLDAP(passwordChnageDetails, w)
 
 }
 
-// func passChangeOnLDAP(l *ldap.Conn) {
-// 	modReq := ldap.NewModifyRequest("cn=TESTt USER,ou=AppUSER,ou=People,dc=isabellasoft,dc=com", []ldap.Control{})
-// 	modReq.Replace("userPassword", []string{"test_demo"})
+/*
+ Example
+ {
+     "cn": "agnik.sarkar",
+     "oldPass": "testPassowrd",
+     "NewPass": "newpassword"
+ }
+*/
+func passChangeOnLDAP(passDetails changePassLDAP, w http.ResponseWriter) {
+	// Connect to openLDAP as Admin
+	ldapConnection, err := ldap.DialURL("ldap://172.17.0.1:389")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer ldapConnection.Close()
 
-// 	if err := l.Modify(modReq); err != nil {
-// 		log.Fatal("error setting user password:", modReq, err)
-// 	}
-// }
+	err = ldapConnection.Bind("cn=admin,dc=isabellasoft,dc=com", "admin")
+	if err != nil {
+		log.Fatal(err)
+	}
+	modReq := ldap.NewModifyRequest("cn="+passDetails.Cn+",ou=AppUSER,ou=People,dc=isabellasoft,dc=com", []ldap.Control{})
+	modReq.Replace("userPassword", []string{passDetails.NewPass})
+
+	if err := ldapConnection.Modify(modReq); err != nil {
+		log.Fatal("error setting user password:", modReq, err)
+	} else {
+		w.WriteHeader(200)
+		body := "Done"
+		w.Write([]byte(body))
+	}
+}
 
 func middlewareAuth(next http.Handler) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Println("Executing middlewareTwo")
-		// if r.URL.Path == "/foo" {
-		// 	return
-		// }
+		log.Println("Executing Auth MiddleWare")
 
-		next.ServeHTTP(w, r)
+		username, passowrd, ok := r.BasicAuth()
+
+		if !ok {
+			log.Fatal("STOP")
+		} else {
+			if AuthenticateLDAP(username, passowrd) {
+				next.ServeHTTP(w, r)
+			} else {
+				log.Fatal("STOP")
+			}
+		}
 	})
 }
